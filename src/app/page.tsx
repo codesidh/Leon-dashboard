@@ -120,18 +120,14 @@ async function fetchLiveSessions(): Promise<{ ok: boolean; sessions: SessionSumm
   }
 
   // The tool result shape is gateway-specific; normalize defensively.
-  const sessionsRaw = Array.isArray((out.result as any)?.sessions)
-    ? (out.result as any).sessions
-    : Array.isArray(out.result)
-      ? out.result
-      : []
+  const sessionsRaw = Array.isArray((out.result as any)?.sessions) ? (out.result as any).sessions : []
 
   const sessions: SessionSummary[] = sessionsRaw.map((x: any) => ({
     sessionKey: String(x.sessionKey ?? x.key ?? ""),
-    label: x.label,
+    label: x.label || x.displayName,
     kind: x.kind,
-    lastMessageAt: x.lastMessageAt,
-    lastMessage: x.lastMessage,
+    lastMessageAt: typeof x.updatedAt === "number" ? new Date(x.updatedAt).toISOString() : x.lastMessageAt,
+    lastMessage: (Array.isArray(x.messages) && x.messages.length ? x.messages[x.messages.length - 1] : null) as any,
   }))
 
   return { ok: true, sessions }

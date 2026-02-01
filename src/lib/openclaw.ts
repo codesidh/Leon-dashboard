@@ -15,6 +15,18 @@ function getGatewayConfig() {
   return { baseUrl, token }
 }
 
+function tryParseTextJson(x: any): any {
+  try {
+    if (typeof x !== "string") return null
+    const t = x.trim()
+    if (!t) return null
+    if (!(t.startsWith("{") || t.startsWith("["))) return null
+    return JSON.parse(t)
+  } catch {
+    return null
+  }
+}
+
 export async function openclawInvokeTool<T = any>(body: ToolInvokeBody): Promise<ToolInvokeResult<T>> {
   const { baseUrl, token } = getGatewayConfig()
 
@@ -38,10 +50,17 @@ export async function openclawInvokeTool<T = any>(body: ToolInvokeBody): Promise
     return { ok: false, error: data?.error?.message || data?.error || `HTTP ${res.status}` }
   }
 
-  // Gateway returns either {ok:true, result:<value>} or error envelope
-  if (data && data.ok === true) {
-    return { ok: true, result: data.result as T }
+  if (!data || data.ok !== true) {
+    return { ok: false, error: data?.error || "Unknown error" }
   }
 
-  return { ok: false, error: data?.error || "Unknown error" }
+  // Many tools return their data as a single text block inside result.content[].text.
+  // If that text is JSON, parse it and return the parsed object for easier UI use.
+  const maybeText = data?.result?.content?.[0]?.text
+  const parsed = tryParseTextJson(maybeText)
+  if (parsed !== null) {
+    return { ok: true, result: parsed as T }
+  }
+
+  return { ok: true, result: data.result as T }
 }
