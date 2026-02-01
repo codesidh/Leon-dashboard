@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { openclawInvokeTool } from "@/lib/openclaw"
 
 type Issue = {
   id: number
@@ -10,6 +11,14 @@ type Issue = {
   updated_at: string
   state: "open" | "closed"
   labels: Array<{ name: string }>
+}
+
+type SessionSummary = {
+  sessionKey: string
+  label?: string
+  kind?: string
+  lastMessageAt?: string
+  lastMessage?: { role?: string; content?: string } | null
 }
 
 const STATUS_LABELS = [
@@ -45,17 +54,12 @@ async function fetchIssues(): Promise<Issue[]> {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
     },
-    // server component: no need to cache
     cache: "no-store",
   })
 
-  if (!res.ok) {
-    // Avoid leaking details in UI; return empty list
-    return []
-  }
+  if (!res.ok) return []
 
   const data = (await res.json()) as Issue[]
-  // Filter out PRs (they appear in /issues) by checking for pull_request field
   return (data as any[]).filter((x) => !x.pull_request) as Issue[]
 }
 
@@ -81,8 +85,60 @@ function IssueCard({ issue }: { issue: Issue }) {
   )
 }
 
+function SessionCard({ s }: { s: SessionSummary }) {
+  return (
+    <Card className="rounded-2xl">
+      <CardHeader className="space-y-2">
+        <CardTitle className="text-sm font-medium leading-snug">
+          {s.label || s.sessionKey}
+        </CardTitle>
+        <div className="flex flex-wrap gap-2">
+          {s.kind ? <Badge variant="secondary">{s.kind}</Badge> : null}
+          <Badge variant="outline">{s.sessionKey}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="text-xs text-muted-foreground space-y-1">
+        {s.lastMessageAt ? <div>Last: {new Date(s.lastMessageAt).toLocaleString()}</div> : null}
+        {s.lastMessage?.content ? (
+          <div className="line-clamp-3">{String(s.lastMessage.content).slice(0, 240)}</div>
+        ) : (
+          <div>No recent message</div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+async function fetchLiveSessions(): Promise<{ ok: boolean; sessions: SessionSummary[]; error?: string }> {
+  const out = await openclawInvokeTool<any>({
+    tool: "sessions_list",
+    args: { limit: 12, activeMinutes: 60 * 24, messageLimit: 1 },
+  })
+
+  if (!out.ok) {
+    return { ok: false, sessions: [], error: typeof out.error === "string" ? out.error : out.error?.message }
+  }
+
+  // The tool result shape is gateway-specific; normalize defensively.
+  const sessionsRaw = Array.isArray((out.result as any)?.sessions)
+    ? (out.result as any).sessions
+    : Array.isArray(out.result)
+      ? out.result
+      : []
+
+  const sessions: SessionSummary[] = sessionsRaw.map((x: any) => ({
+    sessionKey: String(x.sessionKey ?? x.key ?? ""),
+    label: x.label,
+    kind: x.kind,
+    lastMessageAt: x.lastMessageAt,
+    lastMessage: x.lastMessage,
+  }))
+
+  return { ok: true, sessions }
+}
+
 export default async function Page() {
-  const issues = await fetchIssues()
+  const [issues, live] = await Promise.all([fetchIssues(), fetchLiveSessions()])
   const grouped = groupByStatus(issues)
 
   return (
@@ -91,7 +147,7 @@ export default async function Page() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Leon Ops</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Task dashboard powered by GitHub issues + status labels.
+            Task dashboard (GitHub) + live activity (OpenClaw).
           </p>
         </div>
         <div className="text-right text-sm text-muted-foreground">
@@ -102,20 +158,50 @@ export default async function Page() {
 
       <Separator className="my-8" />
 
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Live (OpenClaw)</h2>
+          <Badge variant="outline">{live.ok ? live.sessions.length : "error"}</Badge>
+        </div>
+
+        {!process.env.OPENCLAW_GATEWAY_TOKEN ? (
+          <Card className="rounded-2xl">
+            <CardHeader>
+              <CardTitle className="text-base">OpenClaw not configured</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Set <code className="font-mono">OPENCLAW_GATEWAY_TOKEN</code> in the dashboard service.
+            </CardContent>
+          </Card>
+        ) : !live.ok ? (
+          <Card className="rounded-2xl">
+            <CardHeader>
+              <CardTitle className="text-base">OpenClaw error</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">{live.error || "Unknown error"}</CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {live.sessions.map((s) => (
+              <SessionCard key={s.sessionKey} s={s} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      <Separator className="my-8" />
+
       {!process.env.GITHUB_TOKEN ? (
         <Card className="rounded-2xl">
           <CardHeader>
-            <CardTitle className="text-base">Configuration required</CardTitle>
+            <CardTitle className="text-base">GitHub configuration required</CardTitle>
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground space-y-2">
             <p>
               Set <code className="font-mono">GITHUB_TOKEN</code> for this dashboard to read private
               issues.
             </p>
-            <p>
-              The token should be repo-scoped and provided via environment variables (do not commit
-              secrets).
-            </p>
+            <p>The token should be repo-scoped and provided via environment variables.</p>
           </CardContent>
         </Card>
       ) : (
@@ -143,8 +229,8 @@ export default async function Page() {
       )}
 
       <p className="mt-10 text-xs text-muted-foreground">
-        Tip: create issues and apply one of the labels: <code>status:not-started</code>,{" "}
-        <code>status:in-progress</code>, <code>status:completed</code>, <code>status:archived</code>.
+        Tip: GitHub task labels: <code>status:not-started</code>, <code>status:in-progress</code>,{" "}
+        <code>status:completed</code>, <code>status:archived</code>.
       </p>
     </main>
   )
