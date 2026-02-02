@@ -62,7 +62,7 @@ export interface User {
   id: string
   email: string
   name?: string
-  provider: 'github' | 'google'
+  provider: 'github' | 'google' | 'unknown'
   provider_id: string
   approved: boolean
   created_at: number
@@ -261,7 +261,7 @@ export function deleteTask(id: string): boolean {
 // User CRUD Operations
 // ========================================
 
-export function findOrCreateUser(email: string, name: string, provider: 'github' | 'google', providerId: string): User {
+export function findOrCreateUser(email: string, name: string, provider: 'github' | 'google' | 'unknown', providerId: string): User {
   const db = getDb()
 
   const stmt = db.prepare('SELECT * FROM users WHERE email = ?')

@@ -21,11 +21,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (!email) return false
 
       // Find or create user in database
+      const provider = account?.provider === 'github.com' ? 'github' : account?.provider === 'google' ? 'google' : 'unknown'
       const dbUser = findOrCreateUser(
         email,
         user.name || '',
-        account.provider === 'github.com' ? 'github' : 'google',
-        account.providerAccountId!
+        provider,
+        account?.providerAccountId || ''
       )
 
       // Check if user is approved
@@ -36,13 +37,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return true
     },
     async session({ session, user }) {
-      // Add user role to session
+      // Extend session type to include role and approved
       const dbUser = getUserById(user.id)
-      if (dbUser) {
-        session.user.role = dbUser.role
-        session.user.approved = dbUser.approved
-      }
-      return session
+      return {
+        ...session,
+        user: {
+          ...session?.user,
+          role: dbUser?.role || 'user',
+          approved: dbUser?.approved || false
+        }
+      } as any
     }
   }
 })
