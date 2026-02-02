@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { updateTask } from '@/lib/db'
 
-export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params
     const body = await request.json()
-    const { id } = params
 
     const task = updateTask(id, {
       status: body.status,

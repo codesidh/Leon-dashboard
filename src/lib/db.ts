@@ -50,12 +50,23 @@ export interface UpdateTaskInput {
 
 export interface TaskMetrics {
   total: number
-  byStatus: Record<TaskStatus, number>
+  byStatus: Record<string, number>
   byCategory: Record<string, number>
   completionRate: number // % of completed tasks
   failureRate: number // % of cancelled tasks
   last7Days: number
   last30Days: number
+}
+
+export interface User {
+  id: string
+  email: string
+  name?: string
+  provider: 'github' | 'google'
+  provider_id: string
+  approved: boolean
+  created_at: number
+  role: 'admin' | 'user'
 }
 
 // ========================================
@@ -78,6 +89,23 @@ function initTables(db: Database.Database) {
       additional_comments TEXT
     )
   `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT,
+      provider TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      approved BOOLEAN NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      role TEXT NOT NULL DEFAULT 'user'
+    )
+  `)
+
+  // Create indexes for better query performance
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_users_provider ON users(provider, provider_id)')
 }
 
 function getDb(): Database.Database {
@@ -94,7 +122,7 @@ function generateId(): string {
 }
 
 // ========================================
-// CRUD Operations
+// Task CRUD Operations
 // ========================================
 
 export function createTask(input: CreateTaskInput): Task {
@@ -223,6 +251,88 @@ export function deleteTask(id: string): boolean {
   const db = getDb()
 
   const stmt = db.prepare('DELETE FROM tasks WHERE id = ?')
+  const result = stmt.run(id)
+
+  db.close()
+  return result.changes > 0
+}
+
+// ========================================
+// User CRUD Operations
+// ========================================
+
+export function findOrCreateUser(email: string, name: string, provider: 'github' | 'google', providerId: string): User {
+  const db = getDb()
+
+  const stmt = db.prepare('SELECT * FROM users WHERE email = ?')
+  const existing = stmt.get(email) as any
+
+  if (existing) {
+    db.close()
+    return existing as User
+  }
+
+  const id = generateId()
+  const now = Date.now()
+
+  const insertStmt = db.prepare(`
+    INSERT INTO users (id, email, name, provider, provider_id, approved, created_at, role)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  insertStmt.run(id, email, name, provider, providerId, false, now, 'user')
+
+  const user = getUserById(id)!
+  db.close()
+  return user
+}
+
+export function getUserById(id: string): User | undefined {
+  const db = getDb()
+
+  const stmt = db.prepare('SELECT * FROM users WHERE id = ?')
+  const row = stmt.get(id) as any
+  db.close()
+
+  if (!row) return undefined
+
+  return row as User
+}
+
+export function listUsers(filters?: { approved?: boolean }): User[] {
+  const db = getDb()
+
+  let query = 'SELECT * FROM users WHERE 1=1'
+  const params: any[] = []
+
+  if (filters?.approved !== undefined) {
+    query += ' AND approved = ?'
+    params.push(filters.approved ? 1 : 0)
+  }
+
+  query += ' ORDER BY created_at DESC'
+
+  const stmt = db.prepare(query)
+  const rows = stmt.all(...params) as any[]
+
+  db.close()
+  return rows as User[]
+}
+
+export function approveUser(id: string): boolean {
+  const db = getDb()
+
+  const stmt = db.prepare('UPDATE users SET approved = 1 WHERE id = ?')
+  const result = stmt.run(id)
+
+  db.close()
+  return result.changes > 0
+}
+
+export function rejectUser(id: string): boolean {
+  const db = getDb()
+
+  const stmt = db.prepare('DELETE FROM users WHERE id = ?')
   const result = stmt.run(id)
 
   db.close()
