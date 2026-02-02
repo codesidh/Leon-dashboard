@@ -1,0 +1,294 @@
+import Database from 'better-sqlite3'
+import path from 'node:path'
+import { existsSync } from 'node:fs'
+
+// ========================================
+// Config
+// ========================================
+
+const DB_DIR = path.join(process.cwd(), 'data')
+const DB_PATH = path.join(DB_DIR, 'tasks.db')
+
+// Ensure data directory exists
+if (!existsSync(DB_DIR)) {
+  require('node:fs').mkdirSync(DB_DIR, { recursive: true })
+}
+
+// ========================================
+// Types
+// ========================================
+
+export type TaskStatus = 'Not Started' | 'In Progress' | 'Completed' | 'Cancelled' | 'On Hold'
+
+export interface Task {
+  id: string
+  category: string
+  summary: string
+  description?: string
+  status: TaskStatus
+  created_at: number // unix timestamp ms
+  completed_at?: number // unix timestamp ms
+  reason?: string
+  additional_comments?: string
+}
+
+export interface CreateTaskInput {
+  id?: string // if not provided, auto-generate
+  category: string
+  summary: string
+  description?: string
+  status?: TaskStatus
+  additional_comments?: string
+}
+
+export interface UpdateTaskInput {
+  status?: TaskStatus
+  completed_at?: number
+  reason?: string
+  additional_comments?: string
+}
+
+export interface TaskMetrics {
+  total: number
+  byStatus: Record<TaskStatus, number>
+  byCategory: Record<string, number>
+  completionRate: number // % of completed tasks
+  failureRate: number // % of cancelled tasks
+  last7Days: number
+  last30Days: number
+}
+
+// ========================================
+// Database Setup
+// ========================================
+
+let dbInstance: Database.Database | null = null
+
+function initTables(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      reason TEXT,
+      additional_comments TEXT
+    )
+  `)
+}
+
+function getDb(): Database.Database {
+  if (!dbInstance) {
+    dbInstance = new Database(DB_PATH)
+    initTables(dbInstance)
+    dbInstance.pragma('journal_mode = WAL')
+  }
+  return dbInstance
+}
+
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+}
+
+// ========================================
+// CRUD Operations
+// ========================================
+
+export function createTask(input: CreateTaskInput): Task {
+  const db = getDb()
+
+  const id = input.id || generateId()
+  const now = Date.now()
+  const status = input.status || 'Not Started'
+
+  const stmt = db.prepare(`
+    INSERT INTO tasks (id, category, summary, description, status, created_at, completed_at, reason, additional_comments)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+
+  stmt.run(
+    id,
+    input.category,
+    input.summary,
+    input.description || '',
+    status,
+    now,
+    null, // completed_at
+    null, // reason
+    input.additional_comments || ''
+  )
+
+  const task = getTask(id)!
+  db.close()
+  return task
+}
+
+export function getTask(id: string): Task | undefined {
+  const db = getDb()
+
+  const stmt = db.prepare('SELECT * FROM tasks WHERE id = ?')
+  const row = stmt.get(id) as any
+  db.close()
+
+  if (!row) return undefined
+
+  return row as Task
+}
+
+export function listTasks(filters?: { status?: TaskStatus; category?: string }): Task[] {
+  const db = getDb()
+
+  let query = 'SELECT * FROM tasks WHERE 1=1'
+  const params: any[] = []
+
+  if (filters?.status) {
+    query += ` AND status = ?`
+    params.push(filters.status)
+  }
+
+  if (filters?.category) {
+    query += ` AND category = ?`
+    params.push(filters.category)
+  }
+
+  query += ' ORDER BY created_at DESC'
+
+  const stmt = db.prepare(query)
+  const rows = stmt.all(...params) as any[]
+
+  db.close()
+  return rows as Task[]
+}
+
+export function updateTask(id: string, input: UpdateTaskInput): Task | undefined {
+  const db = getDb()
+
+  const existing = getTask(id)
+  if (!existing) {
+    db.close()
+    return undefined
+  }
+
+  const updates: string[] = []
+  const params: any[] = []
+
+  if (input.status !== undefined) {
+    updates.push('status = ?')
+    params.push(input.status)
+
+    // Auto-set completed_at when status becomes Completed
+    if (input.status === 'Completed' && !input.completed_at) {
+      updates.push('completed_at = ?')
+      params.push(Date.now())
+    } else if (input.status !== 'Completed') {
+      updates.push('completed_at = ?')
+      params.push(null)
+    }
+  }
+
+  if (input.completed_at !== undefined) {
+    updates.push('completed_at = ?')
+    params.push(input.completed_at)
+  }
+
+  if (input.reason !== undefined) {
+    updates.push('reason = ?')
+    params.push(input.reason)
+  }
+
+  if (input.additional_comments !== undefined) {
+    updates.push('additional_comments = ?')
+    params.push(input.additional_comments)
+  }
+
+  if (updates.length === 0) {
+    db.close()
+    return existing
+  }
+
+  params.push(id)
+
+  const stmt = db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`)
+  stmt.run(...params)
+
+  const updated = getTask(id)!
+  db.close()
+  return updated
+}
+
+export function deleteTask(id: string): boolean {
+  const db = getDb()
+
+  const stmt = db.prepare('DELETE FROM tasks WHERE id = ?')
+  const result = stmt.run(id)
+
+  db.close()
+  return result.changes > 0
+}
+
+// ========================================
+// Metrics
+// ========================================
+
+export function getMetrics(): TaskMetrics {
+  const db = getDb()
+
+  // Total tasks
+  const total = (db.prepare('SELECT COUNT(*) as count FROM tasks').get() as any).count as number
+
+  // By status
+  const byStatusStmt = db.prepare('SELECT status, COUNT(*) as count FROM tasks GROUP BY status')
+  const byStatusRows = byStatusStmt.all() as { status: TaskStatus; count: number }[]
+
+  const byStatus: Record<TaskStatus, number> = {
+    'Not Started': 0,
+    'In Progress': 0,
+    'Completed': 0,
+    'Cancelled': 0,
+    'On Hold': 0
+  }
+
+  for (const row of byStatusRows) {
+    byStatus[row.status] = row.count
+  }
+
+  // By category
+  const byCategoryStmt = db.prepare('SELECT category, COUNT(*) as count FROM tasks GROUP BY category')
+  const byCategoryRows = byCategoryStmt.all() as { category: string; count: number }[]
+
+  const byCategory: Record<string, number> = {}
+  for (const row of byCategoryRows) {
+    byCategory[row.category] = row.count
+  }
+
+  // Completion rate: (completed / total) * 100
+  const completionRate = total > 0 ? (byStatus['Completed'] / total) * 100 : 0
+
+  // Failure rate: (cancelled / total) * 100
+  const failureRate = total > 0 ? (byStatus['Cancelled'] / total) * 100 : 0
+
+  // Last 7 days
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const last7DaysStmt = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?')
+  const last7Days = (last7DaysStmt.get(weekAgo) as any).count as number
+
+  // Last 30 days
+  const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const last30DaysStmt = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?')
+  const last30Days = (last30DaysStmt.get(monthAgo) as any).count as number
+
+  db.close()
+
+  return {
+    total,
+    byStatus,
+    byCategory,
+    completionRate: Math.round(completionRate * 10) / 10,
+    failureRate: Math.round(failureRate * 10) / 10,
+    last7Days,
+    last30Days
+  }
+}
