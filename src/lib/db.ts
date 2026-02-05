@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import path from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 
 // ========================================
 // Config
@@ -11,7 +11,7 @@ const DB_PATH = path.join(DB_DIR, 'tasks.db')
 
 // Ensure data directory exists
 if (!existsSync(DB_DIR)) {
-  require('node:fs').mkdirSync(DB_DIR, { recursive: true })
+  mkdirSync(DB_DIR, { recursive: true })
 }
 
 // ========================================
@@ -22,6 +22,7 @@ export type TaskStatus = 'Not Started' | 'In Progress' | 'Completed' | 'Cancelle
 
 export interface Task {
   id: string
+  project?: string | null
   category: string
   summary: string
   description?: string
@@ -34,6 +35,7 @@ export interface Task {
 
 export interface CreateTaskInput {
   id?: string // if not provided, auto-generate
+  project?: string | null
   category: string
   summary: string
   description?: string
@@ -42,6 +44,7 @@ export interface CreateTaskInput {
 }
 
 export interface UpdateTaskInput {
+  project?: string | null
   status?: TaskStatus
   completed_at?: number
   reason?: string
@@ -79,6 +82,7 @@ function initTables(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
+      project TEXT,
       category TEXT NOT NULL,
       summary TEXT NOT NULL,
       description TEXT,
@@ -89,6 +93,13 @@ function initTables(db: Database.Database) {
       additional_comments TEXT
     )
   `)
+
+  // Best-effort migration: ensure project column exists on existing DBs
+  try {
+    db.exec('ALTER TABLE tasks ADD COLUMN project TEXT')
+  } catch (err) {
+    // ignore error if column already exists
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -109,12 +120,20 @@ function initTables(db: Database.Database) {
 }
 
 function getDb(): Database.Database {
-  if (!dbInstance) {
+  // Heal if a previous instance was closed for any reason
+  const isOpen = (instance: Database.Database | null) => {
+    if (!instance) return false
+    // better-sqlite3 exposes `open` on the Database instance
+    return (instance as unknown as { open?: boolean }).open !== false
+  }
+
+  if (!isOpen(dbInstance)) {
     dbInstance = new Database(DB_PATH)
     initTables(dbInstance)
     dbInstance.pragma('journal_mode = WAL')
   }
-  return dbInstance
+
+  return dbInstance as Database.Database
 }
 
 function generateId(): string {
@@ -133,12 +152,13 @@ export function createTask(input: CreateTaskInput): Task {
   const status = input.status || 'Not Started'
 
   const stmt = db.prepare(`
-    INSERT INTO tasks (id, category, summary, description, status, created_at, completed_at, reason, additional_comments)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, project, category, summary, description, status, created_at, completed_at, reason, additional_comments)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
 
   stmt.run(
     id,
+    input.project || null,
     input.category,
     input.summary,
     input.description || '',
@@ -149,8 +169,20 @@ export function createTask(input: CreateTaskInput): Task {
     input.additional_comments || ''
   )
 
-  const task = getTask(id)!
-  db.close()
+  // We know exactly what we just inserted, so construct the Task object directly
+  const task: Task = {
+    id,
+    project: input.project || null,
+    category: input.category,
+    summary: input.summary,
+    description: input.description || '',
+    status,
+    created_at: now,
+    completed_at: undefined,
+    reason: undefined,
+    additional_comments: input.additional_comments || ''
+  }
+
   return task
 }
 
@@ -159,14 +191,13 @@ export function getTask(id: string): Task | undefined {
 
   const stmt = db.prepare('SELECT * FROM tasks WHERE id = ?')
   const row = stmt.get(id) as any
-  db.close()
 
   if (!row) return undefined
 
   return row as Task
 }
 
-export function listTasks(filters?: { status?: TaskStatus; category?: string }): Task[] {
+export function listTasks(filters?: { status?: TaskStatus; category?: string; project?: string | null }): Task[] {
   const db = getDb()
 
   let query = 'SELECT * FROM tasks WHERE 1=1'
@@ -182,12 +213,16 @@ export function listTasks(filters?: { status?: TaskStatus; category?: string }):
     params.push(filters.category)
   }
 
+  if (filters?.project) {
+    query += ` AND project = ?`
+    params.push(filters.project)
+  }
+
   query += ' ORDER BY created_at DESC'
 
   const stmt = db.prepare(query)
   const rows = stmt.all(...params) as any[]
 
-  db.close()
   return rows as Task[]
 }
 
@@ -196,7 +231,6 @@ export function updateTask(id: string, input: UpdateTaskInput): Task | undefined
 
   const existing = getTask(id)
   if (!existing) {
-    db.close()
     return undefined
   }
 
@@ -217,6 +251,11 @@ export function updateTask(id: string, input: UpdateTaskInput): Task | undefined
     }
   }
 
+  if (input.project !== undefined) {
+    updates.push('project = ?')
+    params.push(input.project)
+  }
+
   if (input.completed_at !== undefined) {
     updates.push('completed_at = ?')
     params.push(input.completed_at)
@@ -233,7 +272,6 @@ export function updateTask(id: string, input: UpdateTaskInput): Task | undefined
   }
 
   if (updates.length === 0) {
-    db.close()
     return existing
   }
 
@@ -243,7 +281,6 @@ export function updateTask(id: string, input: UpdateTaskInput): Task | undefined
   stmt.run(...params)
 
   const updated = getTask(id)!
-  db.close()
   return updated
 }
 
@@ -253,7 +290,6 @@ export function deleteTask(id: string): boolean {
   const stmt = db.prepare('DELETE FROM tasks WHERE id = ?')
   const result = stmt.run(id)
 
-  db.close()
   return result.changes > 0
 }
 
@@ -268,7 +304,6 @@ export function findOrCreateUser(email: string, name: string, provider: 'github'
   const existing = stmt.get(email) as any
 
   if (existing) {
-    db.close()
     return existing as User
   }
 
@@ -283,7 +318,6 @@ export function findOrCreateUser(email: string, name: string, provider: 'github'
   insertStmt.run(id, email, name, provider, providerId, false, now, 'user')
 
   const user = getUserById(id)!
-  db.close()
   return user
 }
 
@@ -292,7 +326,6 @@ export function getUserById(id: string): User | undefined {
 
   const stmt = db.prepare('SELECT * FROM users WHERE id = ?')
   const row = stmt.get(id) as any
-  db.close()
 
   if (!row) return undefined
 
@@ -315,7 +348,6 @@ export function listUsers(filters?: { approved?: boolean }): User[] {
   const stmt = db.prepare(query)
   const rows = stmt.all(...params) as any[]
 
-  db.close()
   return rows as User[]
 }
 
@@ -325,7 +357,6 @@ export function approveUser(id: string): boolean {
   const stmt = db.prepare('UPDATE users SET approved = 1 WHERE id = ?')
   const result = stmt.run(id)
 
-  db.close()
   return result.changes > 0
 }
 
@@ -335,7 +366,6 @@ export function rejectUser(id: string): boolean {
   const stmt = db.prepare('DELETE FROM users WHERE id = ?')
   const result = stmt.run(id)
 
-  db.close()
   return result.changes > 0
 }
 
@@ -389,8 +419,6 @@ export function getMetrics(): TaskMetrics {
   const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
   const last30DaysStmt = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?')
   const last30Days = (last30DaysStmt.get(monthAgo) as any).count as number
-
-  db.close()
 
   return {
     total,

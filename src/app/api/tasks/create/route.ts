@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
 
     const task = createTask({
       id: body.id,
+      project: body.project,
       category: body.category,
       summary: body.summary,
       description: body.description,

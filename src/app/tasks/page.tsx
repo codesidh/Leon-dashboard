@@ -1,9 +1,21 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { DataTable } from '@/components/data-table'
+import type { ColumnDef } from '@tanstack/react-table'
+import { cn } from '@/lib/utils'
 
 interface Task {
   id: string
+  project?: string | null
   category: string
   summary: string
   description?: string
@@ -24,12 +36,20 @@ interface TaskMetrics {
   last30Days: number
 }
 
+const STATUS_ORDER: Task['status'][] = [
+  'In Progress',
+  'Not Started',
+  'On Hold',
+  'Completed',
+  'Cancelled',
+]
+
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [metrics, setMetrics] = useState<TaskMetrics | null>(null)
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [filterCategory, setFilterCategory] = useState<string>('all')
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null)
+  const [filterProject, setFilterProject] = useState<string>('all')
   const [isCreating, setIsCreating] = useState(false)
 
   useEffect(() => {
@@ -49,191 +69,344 @@ export default function TasksPage() {
     setMetrics(data.metrics || null)
   }
 
-  const filteredTasks = tasks.filter(task => {
-    if (filterStatus !== 'all' && task.status !== filterStatus) return false
-    if (filterCategory !== 'all' && task.category !== filterCategory) return false
-    return true
-  })
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      if (filterStatus !== 'all' && task.status !== filterStatus) return false
+      if (filterCategory !== 'all' && task.category !== filterCategory) return false
+      if (filterProject !== 'all' && (task.project || '') !== filterProject) return false
+      return true
+    })
+  }, [tasks, filterStatus, filterCategory, filterProject])
 
-  const categories = Array.from(new Set(tasks.map(t => t.category)))
+  const categories = Array.from(new Set(tasks.map((t) => t.category)))
+  const projects = Array.from(
+    new Set(tasks.map((t) => t.project).filter(Boolean)),
+  ) as string[]
 
   function formatDate(ms: number): string {
     return new Date(ms).toLocaleString()
   }
 
-  function getStatusColor(status: string): string {
+  const columns = useMemo<ColumnDef<Task, any>[]>(
+    () => [
+      {
+        accessorKey: 'status',
+        header: 'Status',
+        cell: ({ row }) => {
+          const status = row.original.status
+          return (
+            <span
+              className={cn(
+                'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium',
+                getStatusBadgeClasses(status),
+              )}
+            >
+              {status}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'summary',
+        header: 'Summary',
+        cell: ({ row }) => {
+          const task = row.original
+          return (
+            <div className="max-w-xs truncate">
+              <div className="text-sm font-medium text-foreground">
+                {task.summary}
+              </div>
+              {task.additional_comments && (
+                <div className="text-xs text-muted-foreground">
+                  {task.additional_comments}
+                </div>
+              )}
+              {task.reason && (
+                <div className="text-xs text-destructive">
+                  Reason: {task.reason}
+                </div>
+              )}
+            </div>
+          )
+        },
+      },
+      {
+        accessorKey: 'project',
+        header: 'Project',
+        cell: ({ row }) => {
+          const project = row.original.project
+          return (
+            <span className="text-xs text-muted-foreground">
+              {project ?? '—'}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'category',
+        header: 'Category',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {row.original.category}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'created_at',
+        header: 'Created',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {formatDate(row.original.created_at)}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'completed_at',
+        header: 'Completed',
+        cell: ({ row }) => (
+          <span className="text-xs text-muted-foreground">
+            {row.original.completed_at
+              ? formatDate(row.original.completed_at)
+              : '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'id',
+        header: () => <div className="text-right">ID</div>,
+        cell: ({ row }) => (
+          <div className="max-w-[180px] text-right text-[11px] text-muted-foreground">
+            <span className="font-mono">{row.original.id}</span>
+          </div>
+        ),
+      },
+    ],
+    [],
+  )
+
+  function getStatusBadgeClasses(status: Task['status']): string {
     switch (status) {
-      case 'Not Started': return 'bg-slate-100 text-slate-700 border-slate-300'
-      case 'In Progress': return 'bg-blue-50 text-blue-700 border-blue-200'
-      case 'Completed': return 'bg-green-50 text-green-700 border-green-200'
-      case 'Cancelled': return 'bg-red-50 text-red-700 border-red-200'
-      case 'On Hold': return 'bg-yellow-50 text-yellow-700 border-yellow-200'
-      default: return 'bg-gray-50 text-gray-700 border-gray-200'
+      case 'Not Started':
+        return 'bg-muted text-muted-foreground border-dashed'
+      case 'In Progress':
+        return 'bg-primary/10 text-primary border-primary/20'
+      case 'Completed':
+        return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30'
+      case 'Cancelled':
+        return 'bg-destructive/10 text-destructive border-destructive/30'
+      case 'On Hold':
+        return 'bg-amber-500/10 text-amber-500 border-amber-500/30'
+      default:
+        return 'bg-muted text-muted-foreground'
     }
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10">
-      <div className="mb-8">
-        <h1 className="text-3xl font-semibold tracking-tight">Tasks</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Track and monitor all tasks issued to Leon
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Track and monitor all work issued to Leon across projects.
         </p>
       </div>
 
-      {/* Metrics */}
+      {/* Metrics row */}
       {metrics && (
-        <div className="mb-8 grid gap-4 md:grid-cols-4">
-          <div className="border rounded-lg p-4">
-            <div className="text-2xl font-bold">{metrics.total}</div>
-            <div className="text-sm text-muted-foreground">Total Tasks</div>
-          </div>
-          <div className="border rounded-lg p-4">
-            <div className="text-2xl font-bold text-green-600">{metrics.completionRate.toFixed(1)}%</div>
-            <div className="text-sm text-muted-foreground">Completion Rate</div>
-          </div>
-          <div className="border rounded-lg p-4">
-            <div className="text-2xl font-bold text-red-600">{metrics.failureRate.toFixed(1)}%</div>
-            <div className="text-sm text-muted-foreground">Failure Rate</div>
-          </div>
-          <div className="border rounded-lg p-4">
-            <div className="text-2xl font-bold">{metrics.last7Days}</div>
-            <div className="text-sm text-muted-foreground">Last 7 Days</div>
-          </div>
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">
+                Total tasks
+              </CardTitle>
+              <CardDescription>All time</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold tracking-tight">
+                {metrics.total}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">
+                Completion rate
+              </CardTitle>
+              <CardDescription>Completed vs. all tasks</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-semibold tracking-tight text-emerald-500">
+                  {metrics.completionRate.toFixed(1)}%
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Failure {metrics.failureRate.toFixed(1)}%
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Last 7 days</CardTitle>
+              <CardDescription>Tasks created recently</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold tracking-tight">
+                {metrics.last7Days}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">
+                Last 30 days</CardTitle>
+              <CardDescription>Rolling monthly volume</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-semibold tracking-tight">
+                {metrics.last30Days}
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
-      {/* Filters */}
-      <div className="mb-6 flex gap-4">
-        <select
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          className="rounded border p-2"
-        >
-          <option value="all">All Status</option>
-          <option value="Not Started">Not Started</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Completed">Completed</option>
-          <option value="Cancelled">Cancelled</option>
-          <option value="On Hold">On Hold</option>
-        </select>
-
-        <select
-          value={filterCategory}
-          onChange={(e) => setFilterCategory(e.target.value)}
-          className="rounded border p-2"
-        >
-          <option value="all">All Categories</option>
-          {categories.map(cat => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
-
-        <button
-          onClick={() => { setIsCreating(true); setSelectedTask(null) }}
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-        >
-          + New Task
-        </button>
-      </div>
-
-      {/* Task List */}
-      <div className="grid gap-4 md:grid-cols-2">
-        {filteredTasks.map(task => (
-          <div
-            key={task.id}
-            className="border rounded-lg p-4 cursor-pointer hover:bg-accent"
-            onClick={() => setSelectedTask(task)}
-          >
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <h3 className="font-medium">{task.summary}</h3>
-              <span className={`px-2 py-0.5 rounded text-xs border ${getStatusColor(task.status)}`}>
-                {task.status}
-              </span>
-            </div>
-            <div className="mb-2 text-sm text-muted-foreground">
-              <div>ID: {task.id}</div>
-              <div>Category: {task.category}</div>
-              <div>Created: {formatDate(task.created_at)}</div>
-              {task.completed_at && <div>Completed: {formatDate(task.completed_at)}</div>}
-            </div>
-            {task.reason && (
-              <div className="mb-2 text-sm text-red-600">Reason: {task.reason}</div>
-            )}
-            {task.additional_comments && (
-              <div className="text-sm text-muted-foreground">Notes: {task.additional_comments}</div>
-            )}
+      {/* Filters + actions */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <CardTitle className="text-sm font-medium">Filters</CardTitle>
+            <CardDescription>
+              Narrow tasks by status, category, or project.
+            </CardDescription>
           </div>
-        ))}
-      </div>
-
-      {filteredTasks.length === 0 && (
-        <div className="py-8 text-center text-muted-foreground">No tasks found</div>
-      )}
-
-      {/* Task Detail Modal */}
-      {selectedTask && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-lg bg-card border p-6 shadow-lg">
-            <h2 className="mb-4 text-xl font-semibold">Task Details</h2>
-            <div className="space-y-2 text-sm">
-              <div><span className="font-medium">ID:</span> {selectedTask.id}</div>
-              <div><span className="font-medium">Category:</span> {selectedTask.category}</div>
-              <div><span className="font-medium">Summary:</span> {selectedTask.summary}</div>
-              {selectedTask.description && (
-                <div><span className="font-medium">Description:</span> {selectedTask.description}</div>
-              )}
-              <div><span className="font-medium">Status:</span> {selectedTask.status}</div>
-              <div><span className="font-medium">Created:</span> {formatDate(selectedTask.created_at)}</div>
-              {selectedTask.completed_at && (
-                <div><span className="font-medium">Completed:</span> {formatDate(selectedTask.completed_at)}</div>
-              )}
-              {selectedTask.reason && (
-                <div><span className="font-medium">Reason:</span> {selectedTask.reason}</div>
-              )}
-              {selectedTask.additional_comments && (
-                <div><span className="font-medium">Comments:</span> {selectedTask.additional_comments}</div>
-              )}
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                onClick={() => setSelectedTask(null)}
-                className="rounded border px-4 py-2 hover:bg-accent"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Create Task Modal */}
-      {isCreating && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-lg bg-card border p-6 shadow-lg">
-            <h2 className="mb-4 text-xl font-semibold">Create Task</h2>
-            <CreateTaskForm
-              onSuccess={() => {
-                setIsCreating(false)
-                fetchTasks()
-                fetchMetrics()
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setFilterStatus('all')
+                setFilterCategory('all')
+                setFilterProject('all')
               }}
-              onCancel={() => setIsCreating(false)}
-            />
+            >
+              Reset
+            </Button>
+            <Button size="sm" onClick={() => setIsCreating(true)}>
+              + New task
+            </Button>
           </div>
-        </div>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Status
+            </label>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="all">All</option>
+              <option value="Not Started">Not Started</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+              <option value="On Hold">On Hold</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Category
+            </label>
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="all">All</option>
+              {categories.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Project
+            </label>
+            <select
+              value={filterProject}
+              onChange={(e) => setFilterProject(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="all">All</option>
+              {projects.map((project) => (
+                <option key={project} value={project}>
+                  {project}
+                </option>
+              ))}
+            </select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Table */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <div>
+            <CardTitle className="text-sm font-medium">Task list</CardTitle>
+            <CardDescription>
+              {filteredTasks.length} matching task
+              {filteredTasks.length === 1 ? '' : 's'}.
+            </CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {filteredTasks.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No tasks found. Adjust filters or create a new task.
+            </div>
+          ) : (
+            <DataTable columns={columns} data={filteredTasks} />
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Create Task Modal – keep simple for now */}
+      {isCreating && (
+        <CreateTaskDialog
+          onClose={() => setIsCreating(false)}
+          onCreated={() => {
+            setIsCreating(false)
+            fetchTasks()
+            fetchMetrics()
+          }}
+        />
       )}
     </div>
   )
 }
 
-function CreateTaskForm({ onSuccess, onCancel }: { onSuccess: () => void; onCancel: () => void }) {
+function CreateTaskDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: () => void
+}) {
   const [form, setForm] = useState({
+    project: '',
     category: '',
     summary: '',
     description: '',
-    status: 'Not Started' as const,
-    additional_comments: ''
+    status: 'Not Started' as Task['status'],
+    additional_comments: '',
   })
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -245,12 +418,13 @@ function CreateTaskForm({ onSuccess, onCancel }: { onSuccess: () => void; onCanc
       const res = await fetch('/api/tasks/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form)
+        body: JSON.stringify(form),
       })
 
       if (res.ok) {
-        onSuccess()
+        onCreated()
       } else {
+        // Basic inline feedback; can be swapped for toast later
         alert('Failed to create task')
       }
     } catch (error) {
@@ -261,85 +435,123 @@ function CreateTaskForm({ onSuccess, onCancel }: { onSuccess: () => void; onCanc
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <label className="block mb-1 text-sm font-medium">Category</label>
-        <input
-          type="text"
-          required
-          value={form.category}
-          onChange={(e) => setForm({ ...form, category: e.target.value })}
-          className="w-full rounded border p-2"
-          placeholder="e.g., DevOps, Healthcare, Personal"
-        />
-      </div>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+      <Card className="w-full max-w-lg">
+        <CardHeader>
+          <CardTitle className="text-base">Create task</CardTitle>
+          <CardDescription>
+            Capture a new unit of work for Leon to track.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Project (optional)
+                </label>
+                <input
+                  type="text"
+                  value={form.project}
+                  onChange={(e) => setForm({ ...form, project: e.target.value })}
+                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="e.g. echolyne"
+                />
+              </div>
 
-      <div>
-        <label className="block mb-1 text-sm font-medium">Summary</label>
-        <input
-          type="text"
-          required
-          value={form.summary}
-          onChange={(e) => setForm({ ...form, summary: e.target.value })}
-          className="w-full rounded border p-2"
-          placeholder="Brief task description"
-        />
-      </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Category
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="e.g. Engineering, DevOps"
+                />
+              </div>
+            </div>
 
-      <div>
-        <label className="block mb-1 text-sm font-medium">Description (optional)</label>
-        <textarea
-          value={form.description}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-          className="w-full rounded border p-2"
-          rows={3}
-          placeholder="Detailed description..."
-        />
-      </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Summary
+              </label>
+              <input
+                type="text"
+                required
+                value={form.summary}
+                onChange={(e) => setForm({ ...form, summary: e.target.value })}
+                className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Short task description"
+              />
+            </div>
 
-      <div>
-        <label className="block mb-1 text-sm font-medium">Status</label>
-        <select
-          value={form.status}
-          onChange={(e) => setForm({ ...form, status: e.target.value as any })}
-          className="w-full rounded border p-2"
-        >
-          <option value="Not Started">Not Started</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Completed">Completed</option>
-          <option value="Cancelled">Cancelled</option>
-          <option value="On Hold">On Hold</option>
-        </select>
-      </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">
+                Description (optional)
+              </label>
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="min-h-[80px] w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder="Detailed context or steps..."
+              />
+            </div>
 
-      <div>
-        <label className="block mb-1 text-sm font-medium">Comments (optional)</label>
-        <textarea
-          value={form.additional_comments}
-          onChange={(e) => setForm({ ...form, additional_comments: e.target.value })}
-          className="w-full rounded border p-2"
-          rows={2}
-          placeholder="Additional notes..."
-        />
-      </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Status
+                </label>
+                <select
+                  value={form.status}
+                  onChange={(e) =>
+                    setForm({ ...form, status: e.target.value as Task['status'] })
+                  }
+                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="Not Started">Not Started</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Cancelled">Cancelled</option>
+                  <option value="On Hold">On Hold</option>
+                </select>
+              </div>
 
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border px-4 py-2 hover:bg-accent"
-          disabled={isSubmitting}
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? 'Creating...' : 'Create'}
-        </button>
-      </div>
-    </form>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Comments (optional)
+                </label>
+                <textarea
+                  value={form.additional_comments}
+                  onChange={(e) =>
+                    setForm({ ...form, additional_comments: e.target.value })
+                  }
+                  className="min-h-[80px] w-full rounded-md border border-border bg-background px-2 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="Additional notes..."
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+                disabled={isSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="sm" disabled={isSubmitting}>
+                {isSubmitting ? 'Creating…' : 'Create task'}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   )
 }
