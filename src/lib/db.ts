@@ -61,6 +61,10 @@ export interface TaskMetrics {
   last30Days: number
 }
 
+export interface MetricsFilters {
+  project?: string | null
+}
+
 export interface User {
   id: string
   email: string
@@ -373,15 +377,29 @@ export function rejectUser(id: string): boolean {
 // Metrics
 // ========================================
 
-export function getMetrics(): TaskMetrics {
+export function getMetrics(filters?: MetricsFilters): TaskMetrics {
   const db = getDb()
 
+  const where: string[] = []
+  const params: any[] = []
+
+  if (filters?.project) {
+    where.push('project = ?')
+    params.push(filters.project)
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+
   // Total tasks
-  const total = (db.prepare('SELECT COUNT(*) as count FROM tasks').get() as any).count as number
+  const total = (
+    db.prepare(`SELECT COUNT(*) as count FROM tasks ${whereClause}`).get(...params) as any
+  ).count as number
 
   // By status
-  const byStatusStmt = db.prepare('SELECT status, COUNT(*) as count FROM tasks GROUP BY status')
-  const byStatusRows = byStatusStmt.all() as { status: TaskStatus; count: number }[]
+  const byStatusStmt = db.prepare(
+    `SELECT status, COUNT(*) as count FROM tasks ${whereClause} GROUP BY status`,
+  )
+  const byStatusRows = byStatusStmt.all(...params) as { status: TaskStatus; count: number }[]
 
   const byStatus: Record<TaskStatus, number> = {
     'Not Started': 0,
@@ -396,8 +414,10 @@ export function getMetrics(): TaskMetrics {
   }
 
   // By category
-  const byCategoryStmt = db.prepare('SELECT category, COUNT(*) as count FROM tasks GROUP BY category')
-  const byCategoryRows = byCategoryStmt.all() as { category: string; count: number }[]
+  const byCategoryStmt = db.prepare(
+    `SELECT category, COUNT(*) as count FROM tasks ${whereClause} GROUP BY category`,
+  )
+  const byCategoryRows = byCategoryStmt.all(...params) as { category: string; count: number }[]
 
   const byCategory: Record<string, number> = {}
   for (const row of byCategoryRows) {
@@ -412,13 +432,29 @@ export function getMetrics(): TaskMetrics {
 
   // Last 7 days
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000
-  const last7DaysStmt = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?')
-  const last7Days = (last7DaysStmt.get(weekAgo) as any).count as number
+  const last7Where = ['created_at >= ?']
+  const last7Params: any[] = [weekAgo]
+  if (filters?.project) {
+    last7Where.push('project = ?')
+    last7Params.push(filters.project)
+  }
+  const last7DaysStmt = db.prepare(
+    `SELECT COUNT(*) as count FROM tasks WHERE ${last7Where.join(' AND ')}`,
+  )
+  const last7Days = (last7DaysStmt.get(...last7Params) as any).count as number
 
   // Last 30 days
   const monthAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
-  const last30DaysStmt = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?')
-  const last30Days = (last30DaysStmt.get(monthAgo) as any).count as number
+  const last30Where = ['created_at >= ?']
+  const last30Params: any[] = [monthAgo]
+  if (filters?.project) {
+    last30Where.push('project = ?')
+    last30Params.push(filters.project)
+  }
+  const last30DaysStmt = db.prepare(
+    `SELECT COUNT(*) as count FROM tasks WHERE ${last30Where.join(' AND ')}`,
+  )
+  const last30Days = (last30DaysStmt.get(...last30Params) as any).count as number
 
   return {
     total,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Card,
   CardContent,
@@ -52,22 +52,32 @@ export default function TasksPage() {
   const [filterProject, setFilterProject] = useState<string>('all')
   const [isCreating, setIsCreating] = useState(false)
 
-  useEffect(() => {
-    fetchTasks()
-    fetchMetrics()
-  }, [])
-
-  async function fetchTasks() {
+  const fetchTasks = useCallback(async () => {
     const res = await fetch('/api/tasks')
     const data = await res.json()
     setTasks(data.tasks || [])
-  }
+  }, [])
 
-  async function fetchMetrics() {
-    const res = await fetch('/api/tasks/metrics')
+  const fetchMetrics = useCallback(async (projectFilter: string) => {
+    const url =
+      projectFilter && projectFilter !== 'all'
+        ? `/api/tasks/metrics?project=${encodeURIComponent(projectFilter)}`
+        : '/api/tasks/metrics'
+
+    const res = await fetch(url)
     const data = await res.json()
     setMetrics(data.metrics || null)
-  }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchTasks()
+  }, [fetchTasks])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchMetrics(filterProject)
+  }, [fetchMetrics, filterProject])
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -87,102 +97,109 @@ export default function TasksPage() {
     return new Date(ms).toLocaleString()
   }
 
-  const columns = useMemo<ColumnDef<Task, any>[]>(
-    () => [
-      {
-        accessorKey: 'status',
-        header: 'Status',
-        cell: ({ row }) => {
-          const status = row.original.status
-          return (
-            <span
-              className={cn(
-                'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium',
-                getStatusBadgeClasses(status),
-              )}
-            >
-              {status}
-            </span>
-          )
-        },
+  const columns: ColumnDef<Task>[] = [
+    {
+      accessorKey: 'status',
+      header: 'Status',
+      cell: ({ row }) => {
+        const status = row.original.status
+        return (
+          <span
+            className={cn(
+              'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium',
+              getStatusBadgeClasses(status),
+            )}
+          >
+            {status}
+          </span>
+        )
       },
-      {
-        accessorKey: 'summary',
-        header: 'Summary',
-        cell: ({ row }) => {
-          const task = row.original
-          return (
-            <div className="max-w-xs truncate">
-              <div className="text-sm font-medium text-foreground">
-                {task.summary}
-              </div>
-              {task.additional_comments && (
-                <div className="text-xs text-muted-foreground">
-                  {task.additional_comments}
-                </div>
-              )}
-              {task.reason && (
-                <div className="text-xs text-destructive">
-                  Reason: {task.reason}
-                </div>
-              )}
+      sortingFn: (rowA, rowB) => {
+        const a = rowA.original.status
+        const b = rowB.original.status
+        return STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b)
+      },
+    },
+    {
+      accessorKey: 'summary',
+      header: 'Summary',
+      cell: ({ row }) => {
+        const task = row.original
+        return (
+          <div className="max-w-xs truncate">
+            <div className="text-sm font-medium text-foreground">
+              {task.summary}
             </div>
-          )
-        },
-      },
-      {
-        accessorKey: 'project',
-        header: 'Project',
-        cell: ({ row }) => {
-          const project = row.original.project
-          return (
-            <span className="text-xs text-muted-foreground">
-              {project ?? '—'}
-            </span>
-          )
-        },
-      },
-      {
-        accessorKey: 'category',
-        header: 'Category',
-        cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {row.original.category}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'created_at',
-        header: 'Created',
-        cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {formatDate(row.original.created_at)}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'completed_at',
-        header: 'Completed',
-        cell: ({ row }) => (
-          <span className="text-xs text-muted-foreground">
-            {row.original.completed_at
-              ? formatDate(row.original.completed_at)
-              : '—'}
-          </span>
-        ),
-      },
-      {
-        accessorKey: 'id',
-        header: () => <div className="text-right">ID</div>,
-        cell: ({ row }) => (
-          <div className="max-w-[180px] text-right text-[11px] text-muted-foreground">
-            <span className="font-mono">{row.original.id}</span>
+            {task.description && (
+              <div className="text-xs text-muted-foreground">
+                {task.description}
+              </div>
+            )}
+            {task.additional_comments && (
+              <div className="text-xs text-muted-foreground">
+                {task.additional_comments}
+              </div>
+            )}
+            {task.reason && (
+              <div className="text-xs text-destructive">
+                Reason: {task.reason}
+              </div>
+            )}
           </div>
-        ),
+        )
       },
-    ],
-    [],
-  )
+    },
+    {
+      accessorKey: 'project',
+      header: 'Project',
+      cell: ({ row }) => {
+        const project = row.original.project
+        return (
+          <span className="text-xs text-muted-foreground">
+            {project ?? '—'}
+          </span>
+        )
+      },
+    },
+    {
+      accessorKey: 'category',
+      header: 'Category',
+      cell: ({ row }) => (
+        <span className="text-xs text-muted-foreground">
+          {row.original.category}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'created_at',
+      header: 'Created',
+      cell: ({ row }) => (
+        <span className="text-xs text-muted-foreground">
+          {formatDate(row.original.created_at)}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'completed_at',
+      header: 'Completed',
+      cell: ({ row }) => (
+        <span className="text-xs text-muted-foreground">
+          {row.original.completed_at
+            ? formatDate(row.original.completed_at)
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'id',
+      header: () => <div className="text-right">ID</div>,
+      cell: ({ row }) => (
+        <div className="max-w-[180px] text-right text-[11px] text-muted-foreground">
+          <span className="font-mono">{row.original.id}</span>
+        </div>
+      ),
+    },
+  ]
 
   function getStatusBadgeClasses(status: Task['status']): string {
     switch (status) {
@@ -218,7 +235,11 @@ export default function TasksPage() {
               <CardTitle className="text-sm font-medium">
                 Total tasks
               </CardTitle>
-              <CardDescription>All time</CardDescription>
+              <CardDescription>
+                {filterProject === 'all'
+                  ? 'All projects, all time'
+                  : `Project: ${filterProject}`}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-semibold tracking-tight">
@@ -279,7 +300,8 @@ export default function TasksPage() {
           <div>
             <CardTitle className="text-sm font-medium">Filters</CardTitle>
             <CardDescription>
-              Narrow tasks by status, category, or project.
+              Narrow tasks by status, category, or project. Metrics reflect the
+              selected project.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
@@ -373,7 +395,16 @@ export default function TasksPage() {
               No tasks found. Adjust filters or create a new task.
             </div>
           ) : (
-            <DataTable columns={columns} data={filteredTasks} />
+            <DataTable
+              columns={columns}
+              data={filteredTasks}
+              initialPageSize={25}
+              initialSorting={[
+                { id: 'status', desc: false },
+                { id: 'created_at', desc: true },
+              ]}
+              getRowId={(task) => task.id}
+            />
           )}
         </CardContent>
       </Card>
@@ -385,7 +416,7 @@ export default function TasksPage() {
           onCreated={() => {
             setIsCreating(false)
             fetchTasks()
-            fetchMetrics()
+            fetchMetrics(filterProject)
           }}
         />
       )}
@@ -427,7 +458,7 @@ function CreateTaskDialog({
         // Basic inline feedback; can be swapped for toast later
         alert('Failed to create task')
       }
-    } catch (error) {
+    } catch {
       alert('Failed to create task')
     } finally {
       setIsSubmitting(false)

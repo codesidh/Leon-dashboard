@@ -14,7 +14,7 @@ A modern task dashboard (Next.js App Router + shadcn/ui + Tailwind v4) that stor
   - `src/lib/db.ts` – database schema + CRUD for tasks/users + metrics
   - `src/lib/openclaw.ts` – helper to call the OpenClaw gateway tools API
   - `src/app/tasks/page.tsx` – main Tasks UI (list, filters, create modal)
-  - `src/app/api/tasks/*` – task APIs (list, create, metrics)
+  - `src/app/api/tasks/*` – task APIs (list, create, update, metrics)
   - `src/app/api/admin/users` – user admin API
   - `src/app/api/health` – lightweight health/diagnostics endpoint
 
@@ -166,6 +166,10 @@ On unexpected DB errors: `500` with `{ "error": "Failed to create task" }`.
 #### `GET /api/tasks/metrics`
 
 Returns aggregate metrics derived from the `tasks` table.
+
+Optional query params:
+
+- `project` – when provided, metrics are calculated only for tasks with that `project` value.
 
 Response:
 
